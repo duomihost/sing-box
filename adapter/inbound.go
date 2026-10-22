@@ -9,6 +9,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -27,6 +28,27 @@ type UpdatableShadowsocksInbound interface {
 	Inbound
 	UpdateUsersByOptions(users []option.ShadowsocksUser) error
 }
+
+// UserCommit is a validated user update that has not been applied. Commit
+// applies it and cannot fail, so a caller can prepare an update outside a
+// critical section and apply it inside one together with its own state.
+type UserCommit interface {
+	Commit()
+}
+
+// PreparableShadowsocksInbound can build and validate a complete user update
+// without applying it. epoch is an opaque, caller-chosen label that the
+// protocol attaches to the context of requests authenticated by the new user
+// table; zero means unlabelled. Inbounds whose method cannot prepare an update
+// return ErrUsersNotPreparable, and callers fall back to UpdateUsersByOptions.
+type PreparableShadowsocksInbound interface {
+	Inbound
+	PrepareUsersByOptions(users []option.ShadowsocksUser, epoch uint64) (UserCommit, error)
+}
+
+// ErrUsersNotPreparable is returned by PrepareUsersByOptions when the
+// inbound's method can only replace its users in one step.
+var ErrUsersNotPreparable = E.New("inbound cannot prepare a user update")
 
 type TCPInjectableInbound interface {
 	Inbound
