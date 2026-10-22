@@ -21,7 +21,6 @@ import (
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
 	E "github.com/sagernet/sing/common/exceptions"
-	F "github.com/sagernet/sing/common/format"
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -39,8 +38,7 @@ type MultiInbound struct {
 	router   adapter.ConnectionRouterEx
 	logger   logger.ContextLogger
 	listener *listener.Listener
-	service  shadowsocks.MultiService[int]
-	users    []option.ShadowsocksUser
+	service  shadowsocks.MultiService[string]
 	tracker  adapter.SSMTracker
 }
 
@@ -62,9 +60,9 @@ func newMultiInbound(ctx context.Context, router adapter.Router, logger log.Cont
 	} else {
 		udpTimeout = C.UDPTimeout
 	}
-	var service shadowsocks.MultiService[int]
+	var service shadowsocks.MultiService[string]
 	if common.Contains(shadowaead_2022.List, options.Method) {
-		service, err = shadowaead_2022.NewMultiServiceWithPassword[int](
+		service, err = shadowaead_2022.NewMultiServiceWithPassword[string](
 			options.Method,
 			options.Password,
 			int64(udpTimeout.Seconds()),
@@ -72,7 +70,7 @@ func newMultiInbound(ctx context.Context, router adapter.Router, logger log.Cont
 			ntp.TimeFuncFromContext(ctx),
 		)
 	} else if common.Contains(shadowaead.List, options.Method) {
-		service, err = shadowaead.NewMultiService[int](
+		service, err = shadowaead.NewMultiService[string](
 			options.Method,
 			int64(udpTimeout.Seconds()),
 			adapter.NewUpstreamHandler(adapter.InboundContext{}, inbound.newConnection, inbound.newPacketConnection, inbound),
@@ -84,17 +82,12 @@ func newMultiInbound(ctx context.Context, router adapter.Router, logger log.Cont
 		return nil, err
 	}
 	if len(options.Users) > 0 {
-		err = service.UpdateUsersWithPasswords(common.MapIndexed(options.Users, func(index int, user option.ShadowsocksUser) int {
-			return index
-		}), common.Map(options.Users, func(user option.ShadowsocksUser) string {
-			return user.Password
-		}))
+		err = updateServiceUsers(service, options.Users)
 		if err != nil {
 			return nil, err
 		}
 	}
 	inbound.service = service
-	inbound.users = options.Users
 	inbound.listener = listener.New(listener.Options{
 		Context:                  ctx,
 		Logger:                   logger,
@@ -123,18 +116,14 @@ func (h *MultiInbound) SetTracker(tracker adapter.SSMTracker) {
 }
 
 func (h *MultiInbound) UpdateUsers(users []string, uPSKs []string) error {
-	err := h.service.UpdateUsersWithPasswords(common.MapIndexed(users, func(index int, user string) int {
-		return index
-	}), uPSKs)
-	if err != nil {
-		return err
+	if len(users) != len(uPSKs) {
+		return E.New("users and passwords length mismatch")
 	}
-	h.users = common.Map(users, func(user string) option.ShadowsocksUser {
-		return option.ShadowsocksUser{
-			Name: user,
-		}
-	})
-	return nil
+	options := make([]option.ShadowsocksUser, len(users))
+	for i := range users {
+		options[i] = option.ShadowsocksUser{Name: users[i], Password: uPSKs[i]}
+	}
+	return updateServiceUsers(h.service, options)
 }
 
 //nolint:staticcheck
@@ -159,14 +148,12 @@ func (h *MultiInbound) NewPacketEx(buffer *buf.Buffer, source M.Socksaddr) {
 }
 
 func (h *MultiInbound) newConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext) error {
-	userIndex, loaded := auth.UserFromContext[int](ctx)
+	userKey, loaded := auth.UserFromContext[string](ctx)
 	if !loaded {
 		return os.ErrInvalid
 	}
-	user := h.users[userIndex].Name
-	if user == "" {
-		user = F.ToString(userIndex)
-	} else {
+	user, named := userFromKey(userKey)
+	if named {
 		metadata.User = user
 	}
 	h.logger.InfoContext(ctx, "[", user, "] inbound connection to ", metadata.Destination)
@@ -182,14 +169,12 @@ func (h *MultiInbound) newConnection(ctx context.Context, conn net.Conn, metadat
 }
 
 func (h *MultiInbound) newPacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext) error {
-	userIndex, loaded := auth.UserFromContext[int](ctx)
+	userKey, loaded := auth.UserFromContext[string](ctx)
 	if !loaded {
 		return os.ErrInvalid
 	}
-	user := h.users[userIndex].Name
-	if user == "" {
-		user = F.ToString(userIndex)
-	} else {
+	user, named := userFromKey(userKey)
+	if named {
 		metadata.User = user
 	}
 	ctx = log.ContextWithNewID(ctx)
