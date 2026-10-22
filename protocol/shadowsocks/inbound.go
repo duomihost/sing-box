@@ -35,7 +35,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	} else if options.Managed && (len(options.Users) > 0 || len(options.Destinations) > 0) {
 		return nil, E.New("users and destinations options are not supported in managed servers")
 	}
-	if len(options.Users) > 0 || options.Managed {
+	if len(options.Users) > 0 || options.Managed || shadowsocks.ManagedUsers(ctx) {
 		return newMultiInbound(ctx, router, logger, tag, options)
 	} else if len(options.Destinations) > 0 {
 		return newRelayInbound(ctx, router, logger, tag, options)

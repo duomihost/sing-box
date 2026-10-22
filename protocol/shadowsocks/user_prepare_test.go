@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"errors"
 	"testing"
 
-	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-shadowsocks"
 	"github.com/sagernet/sing-shadowsocks/shadowaead"
@@ -58,14 +56,45 @@ func TestPrepareServiceUsersCommitsOnlyOnCommit(t *testing.T) {
 	}
 }
 
-func TestPrepareServiceUsersLegacyNotPreparable(t *testing.T) {
-	service, err := shadowaead.NewMultiService[string]("aes-128-gcm", 300, &recordingHandler{})
+func TestPrepareServiceUsersLegacyIsAtomic(t *testing.T) {
+	handler := &epochHandler{}
+	service, err := shadowaead.NewMultiService[string]("aes-128-gcm", 300, handler)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = prepareServiceUsers(service, []option.ShadowsocksUser{{Name: "a", Password: "p"}}, 1)
-	if !errors.Is(err, adapter.ErrUsersNotPreparable) {
-		t.Fatalf("err = %v, want ErrUsersNotPreparable", err)
+	commit, err := prepareServiceUsers(service, []option.ShadowsocksUser{{Name: "a", Password: "p"}}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	method, err := shadowaead.New("aes-128-gcm", nil, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func() []byte {
+		capture := &memConn{r: bytes.NewReader(nil)}
+		if _, err := method.DialEarlyConn(capture, M.ParseSocksaddr("test.com:443")).Write([]byte("hello")); err != nil {
+			t.Fatal(err)
+		}
+		return capture.w.Bytes()
+	}
+	if err = service.NewConnection(context.Background(), &memConn{r: bytes.NewReader(request())}, M.Metadata{}); err == nil {
+		t.Fatal("published before commit")
+	}
+	commit.Commit()
+	if err = service.NewConnection(context.Background(), &memConn{r: bytes.NewReader(request())}, M.Metadata{}); err != nil {
+		t.Fatal(err)
+	}
+	if handler.epoch != 7 {
+		t.Fatal("legacy request lost epoch", handler.epoch)
+	}
+}
+func TestManagedInboundRejectsOutOfTransactionWrites(t *testing.T) {
+	h := &MultiInbound{ctx: shadowsocks.ContextWithManagedUsers(context.Background())}
+	if h.UpdateUsers([]string{"a"}, []string{"p"}) == nil {
+		t.Fatal("SSM bypass accepted")
+	}
+	if h.UpdateUsersByOptions([]option.ShadowsocksUser{{Name: "a", Password: "p"}}) == nil {
+		t.Fatal("direct bypass accepted")
 	}
 }
 

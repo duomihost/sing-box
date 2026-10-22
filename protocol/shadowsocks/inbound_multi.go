@@ -88,6 +88,9 @@ func newMultiInbound(ctx context.Context, router adapter.Router, logger log.Cont
 		}
 	}
 	inbound.service = service
+	if multi, ok := service.(*shadowaead_2022.MultiService[string]); ok {
+		multi.SetUDPPolicy(shadowaead_2022.UDPPolicyFromContext(ctx))
+	}
 	inbound.listener = listener.New(listener.Options{
 		Context:                  ctx,
 		Logger:                   logger,
@@ -108,7 +111,13 @@ func (h *MultiInbound) Start(stage adapter.StartStage) error {
 }
 
 func (h *MultiInbound) Close() error {
-	return h.listener.Close()
+	err := h.listener.Close()
+	if closer, ok := h.service.(interface{ Close() error }); ok {
+		if e := closer.Close(); err == nil {
+			err = e
+		}
+	}
+	return err
 }
 
 func (h *MultiInbound) SetTracker(tracker adapter.SSMTracker) {
@@ -116,6 +125,9 @@ func (h *MultiInbound) SetTracker(tracker adapter.SSMTracker) {
 }
 
 func (h *MultiInbound) UpdateUsers(users []string, uPSKs []string) error {
+	if shadowsocks.ManagedUsers(h.ctx) {
+		return E.New("managed SSM user writes require the Node transaction and are disabled")
+	}
 	if len(users) != len(uPSKs) {
 		return E.New("users and passwords length mismatch")
 	}

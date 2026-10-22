@@ -19,12 +19,15 @@ const unnamedUserPrefix = "\x00"
 var _ adapter.PreparableShadowsocksInbound = (*MultiInbound)(nil)
 
 func (h *MultiInbound) UpdateUsersByOptions(users []option.ShadowsocksUser) error {
+	if shadowsocks.ManagedUsers(h.ctx) {
+		return E.New("managed updates require prepare/commit")
+	}
 	return updateServiceUsers(h.service, users)
 }
 
 // PrepareUsersByOptions validates users and builds the complete protocol user
-// table without publishing it; Commit publishes it. Only SIP022 methods can
-// prepare an update; other methods return adapter.ErrUsersNotPreparable.
+// table without publishing it; Commit publishes it. Services without a
+// preparer return adapter.ErrUsersNotPreparable.
 func (h *MultiInbound) PrepareUsersByOptions(users []option.ShadowsocksUser, epoch uint64) (adapter.UserCommit, error) {
 	return prepareServiceUsers(h.service, users, epoch)
 }
@@ -83,5 +86,6 @@ func userFromKey(key string) (user string, named bool) {
 	if strings.HasPrefix(key, unnamedUserPrefix) {
 		return strings.TrimPrefix(key, unnamedUserPrefix), false
 	}
-	return key, true
+	name, _, _ := strings.Cut(key, "\x00uid:")
+	return name, true
 }
