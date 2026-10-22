@@ -168,4 +168,4 @@ require (
 	lukechampine.com/blake3 v1.3.0 // indirect
 )
 
-replace github.com/sagernet/sing-shadowsocks => github.com/duomihost/sing-shadowsocks v0.2.9-0.20261022134632-c70c7322ffc2
+replace github.com/sagernet/sing-shadowsocks => github.com/duomihost/sing-shadowsocks v0.2.9-0.20261022135741-55f248b72158
